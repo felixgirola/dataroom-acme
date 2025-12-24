@@ -49,7 +49,7 @@ export function formatFileSize(bytes: number | null | undefined): string {
  * Format an ISO date string to a human-readable format.
  * 
  * @param dateString - ISO date string
- * @returns Formatted string like "Dec 24, 2024"
+ * @returns Formatted string like "Dec 24, 2025"
  */
 export function formatDate(dateString: string | null | undefined): string {
   if (!dateString) return ''

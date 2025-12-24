@@ -6,7 +6,7 @@ that integrates with Google Drive. It handles OAuth authentication, file
 imports, and local storage of documents for due diligence workflows.
 
 Author: Felix Gabriel Girola
-Created: December 24, 2024
+Created: December 24, 2025
 Location: Mexico City, Mexico 🇲🇽
 
 Assessment: Senior Full Stack Engineer (Python/Flask/React)

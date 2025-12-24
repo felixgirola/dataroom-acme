@@ -10,7 +10,7 @@
  * The app uses a simple state machine: loading -> authenticated/unauthenticated
  * 
  * @author Felix Gabriel Girola
- * @created December 24, 2024
+ * @created December 24, 2025
  */
 
 import { useState, useEffect } from 'react'

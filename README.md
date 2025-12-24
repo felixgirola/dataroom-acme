@@ -14,7 +14,7 @@
 
 > **Technical Assessment** for **Senior Full Stack Engineer (Python/Flask/React)**
 > 
-> 📅 Created: December 24, 2024  
+> 📅 Created: December 24, 2025  
 > 👨‍💻 Author: **Felix Gabriel Girola**  
 > 📍 Location: Mexico City, Mexico 🇲🇽
 
@@ -383,7 +383,7 @@ MIT License - Feel free to use this code for your own projects.
 ║   Built with passion for clean code and great UX.            ║
 ║                                                               ║
 ║   - Felix Gabriel Girola                                      ║
-║     Mexico City 🇲🇽 | December 2024                           ║
+║     Mexico City 🇲🇽 | December 2025                           ║
 ║                                                               ║
 ╚═══════════════════════════════════════════════════════════════╝
 ```
