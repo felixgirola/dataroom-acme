@@ -310,16 +310,48 @@ Port 5000 is used by AirPlay on macOS. That's why we use port 5001 instead.
 
 ---
 
-## 🚀 Production Deployment
+## 🚀 Production Deployment (Vercel)
 
-For production deployment, consider:
+This project is configured for easy deployment on [Vercel](https://vercel.com) (free tier).
 
-1. **Use PostgreSQL** - Set `DATABASE_URL` environment variable
-2. **Strong SECRET_KEY** - Generate a secure random key
-3. **HTTPS** - Update redirect URI in Google Cloud
-4. **Gunicorn** - `gunicorn -w 4 app:app`
-5. **Build frontend** - `npm run build`
-6. **Publish OAuth app** - Complete Google verification if needed
+### Quick Deploy to Vercel
+
+1. **Push to GitHub**
+   ```bash
+   cd /path/to/dataroom-acme
+   git add .
+   git commit -m "Add Vercel deployment config"
+   git remote add origin https://github.com/YOUR_USERNAME/dataroom-acme.git
+   git push -u origin main
+   ```
+
+2. **Deploy on Vercel**
+   - Go to [vercel.com](https://vercel.com) and sign up with GitHub
+   - Click **Add New** → **Project**
+   - Import your `dataroom-acme` repository
+   - Click **Deploy**
+
+3. **Set Environment Variables**
+   - Go to Project Settings → Environment Variables
+   - Add these variables:
+     - `GOOGLE_CLIENT_ID` = your client ID
+     - `GOOGLE_CLIENT_SECRET` = your client secret
+     - `FRONTEND_URL` = `https://your-project.vercel.app`
+   - Redeploy for changes to take effect
+
+4. **Update Google OAuth Redirect URI**
+   - In Google Cloud Console → APIs & Services → Credentials
+   - Edit your OAuth client and add:
+     ```
+     https://your-project.vercel.app/api/auth/callback
+     ```
+
+5. **Access Your App** 🎉
+   - Your app: `https://your-project.vercel.app`
+
+### Alternative: Render Deployment
+
+A `render.yaml` is also included for deployment on Render.com if preferred.
 
 ---
 

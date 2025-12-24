@@ -13,6 +13,8 @@
  * @author Felix Gabriel Girola
  */
 
+// In production, API calls go through the Render rewrite rules
+// In development, they go through the Vite proxy
 const API_BASE = '/api'
 
 // ============================================================================
