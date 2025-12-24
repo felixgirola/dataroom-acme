@@ -1,27 +1,22 @@
 """
 Vercel Serverless API for Acme Data Room
 
-This module provides the serverless API endpoints for Vercel deployment.
-It wraps the Flask application to work with Vercel's serverless functions.
+Lightweight API using direct HTTP requests instead of the heavy
+google-api-python-client to stay within Vercel's 250MB limit.
 
 Author: Felix Gabriel Girola
 """
 
 import os
-import sys
 import json
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
-import tempfile
+import requests
 
-# Google OAuth imports
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload
 from google.auth.transport.requests import Request as GoogleRequest
-import io
 
 # Configuration from environment
 GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
@@ -34,8 +29,7 @@ SCOPES = [
     'https://www.googleapis.com/auth/drive.metadata.readonly'
 ]
 
-# In-memory storage for serverless (for demo purposes)
-# In production, use a database like Vercel Postgres or PlanetScale
+# In-memory storage (for demo - use Vercel KV or database in production)
 token_storage = {}
 files_storage = {}
 
@@ -77,15 +71,29 @@ def get_credentials():
     return creds
 
 
+def drive_api_request(creds, endpoint, params=None):
+    """Make a request to Google Drive API using requests library"""
+    headers = {'Authorization': f'Bearer {creds.token}'}
+    url = f'https://www.googleapis.com/drive/v3/{endpoint}'
+    response = requests.get(url, headers=headers, params=params)
+    return response.json()
+
+
 class handler(BaseHTTPRequestHandler):
     """Vercel serverless function handler"""
+    
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
     
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
         
-        # Route handling
         if path == '/api/auth/status':
             self.handle_auth_status()
         elif path == '/api/auth/login':
@@ -108,7 +116,6 @@ class handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         
-        # Read request body
         content_length = int(self.headers.get('Content-Length', 0))
         body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
         
@@ -193,23 +200,23 @@ class handler(BaseHTTPRequestHandler):
             return
         
         try:
-            service = build('drive', 'v3', credentials=creds)
+            params = {
+                'pageSize': 50,
+                'fields': 'nextPageToken,files(id,name,mimeType,size,modifiedTime)',
+                'q': 'trashed=false',
+                'orderBy': 'modifiedTime desc'
+            }
+            
             page_token = query.get('pageToken', [None])[0]
+            if page_token:
+                params['pageToken'] = page_token
+            
             search = query.get('query', [None])[0]
-            
-            q = "trashed=false"
             if search:
-                q += f" and name contains '{search}'"
+                params['q'] = f"trashed=false and name contains '{search}'"
             
-            results = service.files().list(
-                pageSize=50,
-                fields="nextPageToken, files(id, name, mimeType, size, modifiedTime)",
-                pageToken=page_token,
-                q=q,
-                orderBy="modifiedTime desc"
-            ).execute()
-            
-            self.send_json(results)
+            result = drive_api_request(creds, 'files', params)
+            self.send_json(result)
         except Exception as e:
             self.send_json({'error': str(e)}, 500)
     
@@ -229,7 +236,6 @@ class handler(BaseHTTPRequestHandler):
             return
         
         try:
-            # Store metadata (in serverless, we store metadata only)
             file_record = {
                 'id': len(files_storage) + 1,
                 'name': file_name,
@@ -255,23 +261,21 @@ class handler(BaseHTTPRequestHandler):
         self.send_json({'files': files})
     
     def handle_get_file(self, file_id):
-        # Find file by ID
         for f in files_storage.values():
             if str(f['id']) == file_id:
-                # For serverless, redirect to Google Drive for viewing
                 creds = get_credentials()
                 if creds:
                     try:
-                        service = build('drive', 'v3', credentials=creds)
-                        file_data = service.files().get(
-                            fileId=f['google_drive_id'],
-                            fields='webViewLink'
-                        ).execute()
-                        
-                        self.send_response(302)
-                        self.send_header('Location', file_data.get('webViewLink', '#'))
-                        self.end_headers()
-                        return
+                        result = drive_api_request(
+                            creds, 
+                            f"files/{f['google_drive_id']}", 
+                            {'fields': 'webViewLink'}
+                        )
+                        if 'webViewLink' in result:
+                            self.send_response(302)
+                            self.send_header('Location', result['webViewLink'])
+                            self.end_headers()
+                            return
                     except:
                         pass
                 
@@ -288,4 +292,3 @@ class handler(BaseHTTPRequestHandler):
                 return
         
         self.send_json({'error': 'File not found'}, 404)
-
