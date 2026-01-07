@@ -5,11 +5,8 @@
  * Features:
  * - File icon based on MIME type
  * - File name with truncation for long names
- * - Size and date information
+ * - Size, date, and source information
  * - Hover actions for view and delete
- * 
- * The card uses a hover reveal pattern for action buttons to keep
- * the UI clean while still making actions easily accessible.
  */
 
 import { Trash2, ExternalLink } from 'lucide-react'

@@ -1,347 +1,274 @@
 """
 Acme Data Room - Backend API
 
-This Flask application provides the backend for a secure document repository
-that integrates with Google Drive. It handles OAuth authentication, file
-imports, and local storage of documents for due diligence workflows.
+This Flask application provides the backend for a secure document repository.
+Simplified version without external service dependencies (Google Drive).
 
-Author: Felix Gabriel Girola
-Created: December 24, 2025
-Location: Mexico City, Mexico 🇲🇽
+Features:
+- Mock authentication (no external OAuth required)
+- Direct file uploads
+- Simulated "Drive" files for demo purposes
+- Local storage of documents
 
-Assessment: Senior Full Stack Engineer (Python/Flask/React)
+Author: Acme Team
 """
 
 import os
-from flask import Flask, request, jsonify, redirect, send_file
+import uuid
+from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
-from datetime import datetime, timedelta
+from datetime import datetime
+from werkzeug.utils import secure_filename
 from config import Config
-from models import db, OAuthToken, File
-from google_auth import (
-    create_oauth_flow, 
-    get_credentials_from_token, 
-    get_drive_service,
-    list_drive_files,
-    download_file
-)
-from google.auth.transport.requests import Request as GoogleRequest
+from models import db, File
 
 # Initialize Flask app with configuration
 app = Flask(__name__)
 app.config.from_object(Config)
 
 # Enable CORS for frontend requests
-# This allows the React frontend to communicate with our API
 CORS(app, origins=[Config.FRONTEND_URL], supports_credentials=True)
 
 # Initialize database
 db.init_app(app)
 
-# Make sure the uploads directory exists for storing imported files
+# Make sure the uploads directory exists for storing files
 os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
 
 # Create database tables on startup
-# In production, you'd want to use migrations (Flask-Migrate) instead
 with app.app_context():
     db.create_all()
 
 
 # =============================================================================
-# Authentication Routes
-# These endpoints handle the Google OAuth 2.0 flow for Drive access
+# Mock Authentication Routes
+# No external OAuth - just a simple session simulation
 # =============================================================================
+
+# Simple in-memory session (for demo purposes)
+_mock_authenticated = True  # Always authenticated for demo
+
 
 @app.route('/api/auth/status')
 def auth_status():
     """
-    Check if the user has valid Google Drive authentication.
-    
-    This endpoint is called by the frontend on page load to determine
-    whether to show the login screen or the main application.
-    
-    Returns:
-        JSON with 'authenticated' boolean
+    Check authentication status.
+    In this simplified version, we're always "authenticated".
     """
-    token = OAuthToken.query.order_by(OAuthToken.id.desc()).first()
-    
-    # Check if we have a valid, non-expired token
-    if token and token.token_expiry and token.token_expiry > datetime.utcnow():
-        return jsonify({'authenticated': True})
-    
-    # Try to refresh an expired token if we have a refresh token
-    elif token and token.refresh_token:
-        try:
-            creds = get_credentials_from_token({
-                'access_token': token.access_token,
-                'refresh_token': token.refresh_token,
-                'client_id': Config.GOOGLE_CLIENT_ID,
-                'client_secret': Config.GOOGLE_CLIENT_SECRET,
-                'expiry': token.token_expiry
-            })
-            
-            if creds.expired:
-                creds.refresh(GoogleRequest())
-                # Update the stored token with the new access token
-                token.access_token = creds.token
-                token.token_expiry = creds.expiry
-                db.session.commit()
-            
-            return jsonify({'authenticated': True})
-        except Exception as e:
-            # Token refresh failed - user needs to re-authenticate
-            app.logger.warning(f"Token refresh failed: {e}")
-            return jsonify({'authenticated': False})
-    
-    return jsonify({'authenticated': False})
+    return jsonify({'authenticated': _mock_authenticated})
 
 
 @app.route('/api/auth/login')
 def auth_login():
     """
-    Start the Google OAuth flow.
-    
-    This endpoint generates the Google authorization URL that the frontend
-    will redirect the user to. After the user grants permission, Google
-    redirects back to our callback endpoint.
-    
-    Returns:
-        JSON with 'auth_url' - the Google OAuth authorization URL
+    Mock login - just returns success.
+    No external OAuth required.
     """
-    flow = create_oauth_flow(
-        Config.GOOGLE_CLIENT_ID,
-        Config.GOOGLE_CLIENT_SECRET,
-        Config.GOOGLE_REDIRECT_URI
-    )
-    
-    # Generate the authorization URL
-    # - access_type='offline' ensures we get a refresh token
-    # - prompt='consent' forces the consent screen to show (ensures refresh token)
-    auth_url, state = flow.authorization_url(
-        access_type='offline',
-        include_granted_scopes='true',
-        prompt='consent'
-    )
-    
-    return jsonify({'auth_url': auth_url})
-
-
-@app.route('/api/auth/callback')
-def auth_callback():
-    """
-    Handle the OAuth callback from Google.
-    
-    After the user grants permission on Google's consent screen, they're
-    redirected here with an authorization code. We exchange this code for
-    access and refresh tokens, then store them in the database.
-    
-    Query Parameters:
-        code: The authorization code from Google
-        
-    Redirects:
-        To the frontend with success=true or error message
-    """
-    code = request.args.get('code')
-    
-    if not code:
-        return redirect(f"{Config.FRONTEND_URL}?error=no_code")
-    
-    try:
-        # Exchange the authorization code for tokens
-        flow = create_oauth_flow(
-            Config.GOOGLE_CLIENT_ID,
-            Config.GOOGLE_CLIENT_SECRET,
-            Config.GOOGLE_REDIRECT_URI
-        )
-        flow.fetch_token(code=code)
-        credentials = flow.credentials
-        
-        # Store or update the token in the database
-        # For a multi-user app, you'd associate this with a user ID
-        token = OAuthToken.query.first()
-        if token:
-            token.access_token = credentials.token
-            # Keep existing refresh token if new one isn't provided
-            token.refresh_token = credentials.refresh_token or token.refresh_token
-            token.token_expiry = credentials.expiry
-        else:
-            token = OAuthToken(
-                access_token=credentials.token,
-                refresh_token=credentials.refresh_token,
-                token_expiry=credentials.expiry
-            )
-            db.session.add(token)
-        
-        db.session.commit()
-        return redirect(f"{Config.FRONTEND_URL}?success=true")
-        
-    except Exception as e:
-        app.logger.error(f"OAuth callback error: {e}")
-        return redirect(f"{Config.FRONTEND_URL}?error={str(e)}")
+    global _mock_authenticated
+    _mock_authenticated = True
+    return jsonify({'success': True, 'message': 'Logged in (mock mode)'})
 
 
 @app.route('/api/auth/logout', methods=['POST'])
 def auth_logout():
     """
-    Log out by clearing stored OAuth tokens.
-    
-    This removes all stored tokens from the database. The user will need
-    to re-authenticate to access Google Drive again.
-    
-    Returns:
-        JSON with 'success' boolean
+    Mock logout - clears the session.
     """
-    OAuthToken.query.delete()
-    db.session.commit()
+    global _mock_authenticated
+    _mock_authenticated = False
     return jsonify({'success': True})
 
 
 # =============================================================================
-# Helper Functions
+# Mock "Drive" Files - Simulated external file source
 # =============================================================================
 
-def get_valid_credentials():
-    """
-    Retrieve valid Google credentials, refreshing if necessary.
-    
-    This is a helper function used by all endpoints that need to access
-    Google Drive. It handles token refresh automatically.
-    
-    Returns:
-        google.oauth2.credentials.Credentials or None if not authenticated
-    """
-    token = OAuthToken.query.order_by(OAuthToken.id.desc()).first()
-    if not token:
-        return None
-    
-    creds = get_credentials_from_token({
-        'access_token': token.access_token,
-        'refresh_token': token.refresh_token,
-        'client_id': Config.GOOGLE_CLIENT_ID,
-        'client_secret': Config.GOOGLE_CLIENT_SECRET,
-        'expiry': token.token_expiry
-    })
-    
-    # Automatically refresh expired tokens
-    if creds.expired and creds.refresh_token:
-        creds.refresh(GoogleRequest())
-        token.access_token = creds.token
-        token.token_expiry = creds.expiry
-        db.session.commit()
-    
-    return creds
+# Sample files that simulate a Google Drive listing
+MOCK_DRIVE_FILES = [
+    {
+        'id': 'mock-1',
+        'name': 'Q4 2025 Financial Report.pdf',
+        'mimeType': 'application/pdf',
+        'size': '2457600',
+        'modifiedTime': '2025-12-20T10:30:00Z',
+    },
+    {
+        'id': 'mock-2',
+        'name': 'Company Overview Presentation.pptx',
+        'mimeType': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'size': '5242880',
+        'modifiedTime': '2025-12-18T14:22:00Z',
+    },
+    {
+        'id': 'mock-3',
+        'name': 'Employee Directory.xlsx',
+        'mimeType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'size': '1048576',
+        'modifiedTime': '2025-12-15T09:15:00Z',
+    },
+    {
+        'id': 'mock-4',
+        'name': 'Legal Agreement Draft.docx',
+        'mimeType': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'size': '524288',
+        'modifiedTime': '2025-12-12T16:45:00Z',
+    },
+    {
+        'id': 'mock-5',
+        'name': 'Product Roadmap 2026.pdf',
+        'mimeType': 'application/pdf',
+        'size': '3145728',
+        'modifiedTime': '2025-12-10T11:00:00Z',
+    },
+    {
+        'id': 'mock-6',
+        'name': 'Office Building Photo.jpg',
+        'mimeType': 'image/jpeg',
+        'size': '4194304',
+        'modifiedTime': '2025-12-08T08:30:00Z',
+    },
+    {
+        'id': 'mock-7',
+        'name': 'Board Meeting Minutes.pdf',
+        'mimeType': 'application/pdf',
+        'size': '819200',
+        'modifiedTime': '2025-12-05T15:00:00Z',
+    },
+    {
+        'id': 'mock-8',
+        'name': 'Marketing Budget.xlsx',
+        'mimeType': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'size': '2097152',
+        'modifiedTime': '2025-12-01T10:00:00Z',
+    },
+]
 
-
-# =============================================================================
-# Google Drive Routes
-# These endpoints interact with the Google Drive API
-# =============================================================================
 
 @app.route('/api/drive/files')
 def drive_files():
     """
-    List files from the user's Google Drive.
-    
-    Returns a paginated list of files that can be imported into the data room.
-    Supports search queries to filter files by name.
-    
-    Query Parameters:
-        pageToken: Token for pagination (from previous response)
-        query: Search string to filter files by name
-        
-    Returns:
-        JSON with 'files' array and optional 'nextPageToken'
+    Return mock "Drive" files for the file picker.
+    Supports search filtering.
     """
-    creds = get_valid_credentials()
-    if not creds:
-        return jsonify({'error': 'Not authenticated'}), 401
+    query = request.args.get('query', '').lower()
     
-    try:
-        service = get_drive_service(creds)
-        page_token = request.args.get('pageToken')
-        query = request.args.get('query')
-        
-        results = list_drive_files(service, page_token, query)
-        return jsonify(results)
-    except Exception as e:
-        app.logger.error(f"Error listing drive files: {e}")
-        return jsonify({'error': str(e)}), 500
+    if query:
+        filtered = [f for f in MOCK_DRIVE_FILES if query in f['name'].lower()]
+    else:
+        filtered = MOCK_DRIVE_FILES
+    
+    return jsonify({
+        'files': filtered,
+        'nextPageToken': None  # No pagination for mock data
+    })
 
 
 @app.route('/api/drive/import', methods=['POST'])
-def import_file():
+def import_mock_file():
     """
-    Import a file from Google Drive into the data room.
-    
-    Downloads the file from Google Drive and stores it locally on the server.
-    File metadata is saved to the database for listing and retrieval.
-    
-    Google Docs, Sheets, and Slides are automatically exported to PDF/XLSX
-    format since they don't have a native file format.
-    
-    Request Body (JSON):
-        file_id: Google Drive file ID
-        name: File name
-        mime_type: MIME type of the file
-        size: File size in bytes (optional)
-        
-    Returns:
-        JSON with 'success' boolean and 'file' object
+    Simulate importing a file from "Drive".
+    Creates a placeholder file in the data room.
     """
-    creds = get_valid_credentials()
-    if not creds:
-        return jsonify({'error': 'Not authenticated'}), 401
-    
     data = request.json
     file_id = data.get('file_id')
     file_name = data.get('name')
     mime_type = data.get('mime_type')
     size = data.get('size')
     
-    # Prevent duplicate imports - each file can only be imported once
-    existing = File.query.filter_by(google_drive_id=file_id).first()
+    # Check if already imported
+    existing = File.query.filter_by(source_id=file_id).first()
     if existing:
         return jsonify({'error': 'File already imported', 'file': existing.to_dict()}), 409
     
-    try:
-        service = get_drive_service(creds)
-        
-        # Download the file (handles Google Docs export automatically)
-        file_buffer, final_name, final_mime = download_file(
-            service, file_id, file_name, mime_type
-        )
-        
-        # Create a safe filename for local storage
-        # Remove any characters that could cause filesystem issues
-        safe_name = "".join(
-            c for c in final_name 
-            if c.isalnum() or c in (' ', '.', '-', '_')
-        ).strip()
-        
-        # Prefix with file_id to ensure uniqueness
-        local_path = os.path.join(Config.UPLOAD_FOLDER, f"{file_id}_{safe_name}")
-        
-        # Write the file to disk
-        with open(local_path, 'wb') as f:
-            f.write(file_buffer.read())
-        
-        # Save file metadata to database
-        file_record = File(
-            name=final_name,
-            mime_type=final_mime,
-            size=size or os.path.getsize(local_path),
-            google_drive_id=file_id,
-            local_path=local_path
-        )
-        db.session.add(file_record)
-        db.session.commit()
-        
-        app.logger.info(f"Successfully imported file: {final_name}")
-        return jsonify({'success': True, 'file': file_record.to_dict()})
-        
-    except Exception as e:
-        app.logger.error(f"Error importing file: {e}")
-        return jsonify({'error': str(e)}), 500
+    # Create a placeholder file
+    safe_name = secure_filename(file_name) or f"file_{file_id}"
+    local_path = os.path.join(Config.UPLOAD_FOLDER, f"{file_id}_{safe_name}")
+    
+    # Create a simple placeholder file with some content
+    with open(local_path, 'w') as f:
+        f.write(f"[Mock file placeholder]\n")
+        f.write(f"Original name: {file_name}\n")
+        f.write(f"MIME type: {mime_type}\n")
+        f.write(f"This is a simulated file for demo purposes.\n")
+    
+    # Save to database
+    file_record = File(
+        name=file_name,
+        mime_type=mime_type,
+        size=size or os.path.getsize(local_path),
+        source_id=file_id,
+        source_type='mock_drive',
+        local_path=local_path
+    )
+    db.session.add(file_record)
+    db.session.commit()
+    
+    app.logger.info(f"Mock imported file: {file_name}")
+    return jsonify({'success': True, 'file': file_record.to_dict()})
+
+
+# =============================================================================
+# Direct File Upload Routes
+# =============================================================================
+
+ALLOWED_EXTENSIONS = {
+    'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+    'txt', 'csv', 'jpg', 'jpeg', 'png', 'gif', 'zip'
+}
+
+
+def allowed_file(filename):
+    """Check if file extension is allowed."""
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+@app.route('/api/upload', methods=['POST'])
+def upload_file():
+    """
+    Direct file upload endpoint.
+    Accepts multipart form data with a 'file' field.
+    """
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file provided'}), 400
+    
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({'error': 'No file selected'}), 400
+    
+    if not allowed_file(file.filename):
+        return jsonify({'error': 'File type not allowed'}), 400
+    
+    # Create a unique filename
+    original_name = file.filename
+    safe_name = secure_filename(original_name)
+    unique_id = str(uuid.uuid4())[:8]
+    local_path = os.path.join(Config.UPLOAD_FOLDER, f"{unique_id}_{safe_name}")
+    
+    # Save the file
+    file.save(local_path)
+    
+    # Get file size
+    file_size = os.path.getsize(local_path)
+    
+    # Determine MIME type
+    mime_type = file.content_type or 'application/octet-stream'
+    
+    # Save to database
+    file_record = File(
+        name=original_name,
+        mime_type=mime_type,
+        size=file_size,
+        source_id=unique_id,
+        source_type='upload',
+        local_path=local_path
+    )
+    db.session.add(file_record)
+    db.session.commit()
+    
+    app.logger.info(f"Uploaded file: {original_name}")
+    return jsonify({'success': True, 'file': file_record.to_dict()})
 
 
 # =============================================================================
@@ -353,11 +280,6 @@ def import_file():
 def list_files():
     """
     List all files in the data room.
-    
-    Returns all imported files, sorted by creation date (newest first).
-    
-    Returns:
-        JSON with 'files' array
     """
     files = File.query.order_by(File.created_at.desc()).all()
     return jsonify({'files': [f.to_dict() for f in files]})
@@ -367,26 +289,16 @@ def list_files():
 def get_file(file_id):
     """
     View or download a file from the data room.
-    
-    Serves the actual file content with appropriate MIME type headers
-    so it can be viewed directly in the browser.
-    
-    Path Parameters:
-        file_id: Database ID of the file
-        
-    Returns:
-        The file content with appropriate headers
     """
     file_record = File.query.get_or_404(file_id)
     
-    # Make sure the file still exists on disk
     if not os.path.exists(file_record.local_path):
         return jsonify({'error': 'File not found on disk'}), 404
     
     return send_file(
         file_record.local_path,
         mimetype=file_record.mime_type,
-        as_attachment=False,  # Display in browser instead of download
+        as_attachment=False,
         download_name=file_record.name
     )
 
@@ -395,15 +307,6 @@ def get_file(file_id):
 def delete_file(file_id):
     """
     Delete a file from the data room.
-    
-    Removes the file from both local storage and the database.
-    Note: This does NOT delete the original file from Google Drive.
-    
-    Path Parameters:
-        file_id: Database ID of the file
-        
-    Returns:
-        JSON with 'success' boolean
     """
     file_record = File.query.get_or_404(file_id)
     
@@ -423,14 +326,6 @@ def delete_file(file_id):
 def search_files():
     """
     Search files in the data room by name.
-    
-    Performs a case-insensitive search on file names.
-    
-    Query Parameters:
-        q: Search query string
-        
-    Returns:
-        JSON with 'files' array of matching files
     """
     query = request.args.get('q', '')
     files = File.query.filter(
@@ -445,7 +340,4 @@ def search_files():
 # =============================================================================
 
 if __name__ == '__main__':
-    # Run in debug mode for development
-    # In production, use gunicorn: gunicorn -w 4 app:app
-    # Note: Port 5000 is often used by AirPlay on macOS, so we use 5001
     app.run(debug=True, port=5001)

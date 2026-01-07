@@ -1,20 +1,10 @@
 /**
  * API Client for Acme Data Room
  * 
- * This module provides a typed API client for communicating with the Flask backend.
- * All API calls go through the Vite proxy configured in vite.config.ts, so we use
- * relative paths (/api/...) instead of absolute URLs.
- * 
- * The client is organized into logical groups:
- * - Auth: OAuth flow management
- * - Drive: Google Drive file operations
- * - Files: Data room CRUD operations
- * 
- * @author Felix Gabriel Girola
+ * Simplified version with mock authentication and direct file uploads.
+ * No external service dependencies.
  */
 
-// In production, API calls go through the Render rewrite rules
-// In development, they go through the Vite proxy
 const API_BASE = '/api'
 
 // ============================================================================
@@ -29,25 +19,24 @@ export interface DataroomFile {
   name: string
   mime_type: string | null
   size: number | null
-  google_drive_id: string
+  source_id: string
+  source_type: string
   created_at: string
 }
 
 /**
- * Represents a file from Google Drive (before import)
+ * Represents a file from the mock "Drive" (simulated external source)
  */
 export interface DriveFile {
   id: string
   name: string
   mimeType: string
-  size?: string  // Comes as string from the API
+  size?: string
   modifiedTime?: string
-  iconLink?: string
-  thumbnailLink?: string
 }
 
 /**
- * Response from the Google Drive list endpoint
+ * Response from the mock Drive list endpoint
  */
 export interface DriveListResponse {
   files: DriveFile[]
@@ -60,12 +49,12 @@ export interface DriveListResponse {
 
 export const api = {
   // --------------------------------------------------------------------------
-  // Authentication Endpoints
+  // Authentication Endpoints (Mock)
   // --------------------------------------------------------------------------
 
   /**
-   * Check if the user is authenticated with Google Drive.
-   * Called on app load to determine whether to show login screen.
+   * Check if the user is authenticated.
+   * In mock mode, this is always true after "login".
    */
   async getAuthStatus(): Promise<{ authenticated: boolean }> {
     const res = await fetch(`${API_BASE}/auth/status`)
@@ -73,31 +62,27 @@ export const api = {
   },
 
   /**
-   * Get the Google OAuth authorization URL.
-   * The frontend redirects the user to this URL to start the OAuth flow.
+   * Mock login - no external OAuth required.
    */
-  async getAuthUrl(): Promise<{ auth_url: string }> {
+  async login(): Promise<{ success: boolean }> {
     const res = await fetch(`${API_BASE}/auth/login`)
     return res.json()
   },
 
   /**
-   * Log out by clearing the stored OAuth tokens.
+   * Log out by clearing the session.
    */
   async logout(): Promise<void> {
     await fetch(`${API_BASE}/auth/logout`, { method: 'POST' })
   },
 
   // --------------------------------------------------------------------------
-  // Google Drive Endpoints
+  // Mock Drive Endpoints (Simulated external file source)
   // --------------------------------------------------------------------------
 
   /**
-   * List files from the user's Google Drive.
-   * Supports pagination and search filtering.
-   * 
-   * @param pageToken - Token for fetching the next page of results
-   * @param query - Search string to filter files by name
+   * List files from the mock "Drive".
+   * Returns simulated files for demo purposes.
    */
   async listDriveFiles(pageToken?: string, query?: string): Promise<DriveListResponse> {
     const params = new URLSearchParams()
@@ -110,10 +95,7 @@ export const api = {
   },
 
   /**
-   * Import a file from Google Drive into the data room.
-   * The backend downloads the file and stores it locally.
-   * 
-   * @param file - The Google Drive file to import
+   * Import a file from mock "Drive" into the data room.
    */
   async importFile(file: DriveFile): Promise<{ success: boolean; file: DataroomFile }> {
     const res = await fetch(`${API_BASE}/drive/import`, {
@@ -135,6 +117,29 @@ export const api = {
   },
 
   // --------------------------------------------------------------------------
+  // Direct File Upload
+  // --------------------------------------------------------------------------
+
+  /**
+   * Upload a file directly to the data room.
+   */
+  async uploadFile(file: File): Promise<{ success: boolean; file: DataroomFile }> {
+    const formData = new FormData()
+    formData.append('file', file)
+    
+    const res = await fetch(`${API_BASE}/upload`, {
+      method: 'POST',
+      body: formData,
+    })
+    
+    if (!res.ok) {
+      const error = await res.json()
+      throw new Error(error.error || 'Failed to upload file')
+    }
+    return res.json()
+  },
+
+  // --------------------------------------------------------------------------
   // Data Room File Endpoints
   // --------------------------------------------------------------------------
 
@@ -148,8 +153,6 @@ export const api = {
 
   /**
    * Search files in the data room by name.
-   * 
-   * @param query - Search string
    */
   async searchFiles(query: string): Promise<{ files: DataroomFile[] }> {
     const res = await fetch(`${API_BASE}/files/search?q=${encodeURIComponent(query)}`)
@@ -158,9 +161,6 @@ export const api = {
 
   /**
    * Delete a file from the data room.
-   * Note: This does NOT delete the file from Google Drive.
-   * 
-   * @param fileId - Database ID of the file to delete
    */
   async deleteFile(fileId: number): Promise<void> {
     const res = await fetch(`${API_BASE}/files/${fileId}`, { method: 'DELETE' })
@@ -169,9 +169,6 @@ export const api = {
 
   /**
    * Get the URL for viewing/downloading a file.
-   * 
-   * @param fileId - Database ID of the file
-   * @returns URL that can be opened in a new tab to view the file
    */
   getFileUrl(fileId: number): string {
     return `${API_BASE}/files/${fileId}`
