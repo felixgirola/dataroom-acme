@@ -3,13 +3,12 @@ Vercel Serverless API for Acme Data Room
 
 Simplified version with mock authentication and no external dependencies.
 Perfect for demos and quick deployments.
-
-Author: Acme Team
 """
 
 import os
 import json
 import uuid
+import re
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime
@@ -20,6 +19,12 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', 'https://dataroom-acme.vercel.app'
 # In-memory storage (for demo - resets on each cold start)
 session_storage = {'authenticated': True}  # Always authenticated for demo
 files_storage = {}
+
+# Allowed file extensions
+ALLOWED_EXTENSIONS = {
+    'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx',
+    'txt', 'csv', 'jpg', 'jpeg', 'png', 'gif', 'zip'
+}
 
 # Mock "Drive" files for demo
 MOCK_DRIVE_FILES = [
@@ -207,46 +212,137 @@ class handler(BaseHTTPRequestHandler):
         self.send_json({'success': True, 'file': file_record})
     
     def handle_upload(self):
-        """Handle file upload (limited in serverless)"""
-        # Note: In serverless, we simulate the upload
+        """Handle file upload with multipart form parsing"""
+        content_type = self.headers.get('Content-Type', '')
+
+        if 'multipart/form-data' not in content_type:
+            self.send_json({'error': 'Invalid content type'}, 400)
+            return
+
+        # Extract boundary from content type
+        boundary_match = re.search(r'boundary=(.+)', content_type)
+        if not boundary_match:
+            self.send_json({'error': 'No boundary found'}, 400)
+            return
+
+        boundary = boundary_match.group(1).strip()
+        if boundary.startswith('"') and boundary.endswith('"'):
+            boundary = boundary[1:-1]
+
+        content_length = int(self.headers.get('Content-Length', 0))
+        if content_length == 0:
+            self.send_json({'error': 'No file provided'}, 400)
+            return
+
+        body = self.rfile.read(content_length)
+
+        # Parse multipart data
+        boundary_bytes = ('--' + boundary).encode()
+        parts = body.split(boundary_bytes)
+
+        filename = None
+        file_content = None
+        content_type_file = 'application/octet-stream'
+
+        for part in parts:
+            if b'Content-Disposition' not in part:
+                continue
+
+            # Split headers and content
+            try:
+                header_end = part.find(b'\r\n\r\n')
+                if header_end == -1:
+                    continue
+
+                headers_raw = part[:header_end].decode('utf-8', errors='ignore')
+                content = part[header_end + 4:]
+
+                # Remove trailing boundary markers
+                if content.endswith(b'--\r\n'):
+                    content = content[:-4]
+                elif content.endswith(b'\r\n'):
+                    content = content[:-2]
+
+                # Extract filename from Content-Disposition
+                filename_match = re.search(r'filename="([^"]+)"', headers_raw)
+                if filename_match:
+                    filename = filename_match.group(1)
+                    file_content = content
+
+                    # Extract content type if present
+                    ct_match = re.search(r'Content-Type:\s*([^\r\n]+)', headers_raw)
+                    if ct_match:
+                        content_type_file = ct_match.group(1).strip()
+            except Exception:
+                continue
+
+        if not filename or file_content is None:
+            self.send_json({'error': 'No file provided'}, 400)
+            return
+
+        # Validate extension
+        ext = filename.rsplit('.', 1)[-1].lower() if '.' in filename else ''
+        if ext not in ALLOWED_EXTENSIONS:
+            self.send_json({'error': f'File type .{ext} not allowed'}, 400)
+            return
+
         unique_id = str(uuid.uuid4())[:8]
         file_record = {
             'id': len(files_storage) + 1,
-            'name': f'uploaded_file_{unique_id}.txt',
-            'mime_type': 'text/plain',
-            'size': 1024,
+            'name': filename,
+            'mime_type': content_type_file,
+            'size': len(file_content),
             'source_id': unique_id,
             'source_type': 'upload',
-            'created_at': datetime.utcnow().isoformat()
+            'created_at': datetime.utcnow().isoformat(),
+            '_content': file_content  # Store content for retrieval
         }
         files_storage[unique_id] = file_record
-        self.send_json({'success': True, 'file': file_record})
+
+        # Return response without the _content field
+        response_record = {k: v for k, v in file_record.items() if k != '_content'}
+        self.send_json({'success': True, 'file': response_record})
     
     def handle_list_files(self):
         """List all files"""
-        files = list(files_storage.values())
+        files = []
+        for f in files_storage.values():
+            # Exclude internal _content field from response
+            files.append({k: v for k, v in f.items() if k != '_content'})
         files.sort(key=lambda x: x.get('created_at', ''), reverse=True)
         self.send_json({'files': files})
     
     def handle_search_files(self, query):
         """Search files by name"""
         search = query.get('q', [''])[0].lower()
-        files = [f for f in files_storage.values() if search in f.get('name', '').lower()]
+        files = []
+        for f in files_storage.values():
+            if search in f.get('name', '').lower():
+                files.append({k: v for k, v in f.items() if k != '_content'})
         self.send_json({'files': files})
     
     def handle_get_file(self, file_id):
-        """Get file - returns mock content"""
+        """Get file - returns actual file content if available"""
         for f in files_storage.values():
             if str(f['id']) == file_id:
-                # Return mock content as text
+                mime_type = f.get('mime_type', 'application/octet-stream')
+                filename = f.get('name', 'file')
+
                 self.send_response(200)
-                self.send_header('Content-Type', 'text/plain')
+                self.send_header('Content-Type', mime_type)
+                self.send_header('Content-Disposition', f'inline; filename="{filename}"')
                 self.send_header('Access-Control-Allow-Origin', '*')
                 self.end_headers()
-                content = f"[Mock file: {f['name']}]\n\nThis is a demo file placeholder."
-                self.wfile.write(content.encode())
+
+                # Return actual content if stored, otherwise placeholder
+                if '_content' in f and f['_content']:
+                    self.wfile.write(f['_content'])
+                else:
+                    # Mock files from demo library
+                    content = f"[Demo file: {f['name']}]\n\nThis is a placeholder for demo purposes."
+                    self.wfile.write(content.encode())
                 return
-        
+
         self.send_json({'error': 'File not found'}, 404)
     
     def handle_delete_file(self, file_id):
